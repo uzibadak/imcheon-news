@@ -1,0 +1,113 @@
+name: Enable shared news comments
+on:
+  push:
+    paths:
+      - '.github/workflows/enable-comments.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Update article comments
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('onsubmit="addComment(event)"', 'id="commentForm"')
+          s = s.replace('maxlength="300" placeholder="댓글을 입력해 주세요…"', 'maxlength="500" placeholder="댓글을 입력해 주세요…"')
+          s = re.sub(r'<p class="notice">.*?</p>', '', s, flags=re.S)
+          s = s.replace('© 임천 소식통 · 창작 세계관을 바탕으로 만든 팬메이드 가상 기사 페이지', '© 임천 소식통')
+          script = r'''<script type="module">
+          import { initializeApp } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js";
+          import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
+          const app = initializeApp({
+            apiKey: "AIzaSyDpA6XyO1GfYB925ctUpUU-gY-hHAJMpQI",
+            authDomain: "imcheon-news.firebaseapp.com",
+            projectId: "imcheon-news",
+            storageBucket: "imcheon-news.firebasestorage.app",
+            messagingSenderId: "868628982317",
+            appId: "1:868628982317:web:52ebffd07dd3783ec3e6a4",
+            measurementId: "G-WQLQQ2QCBJ"
+          });
+          const db = getFirestore(app);
+          const commentsRef = collection(db, "comments");
+          const list = document.getElementById("commentList");
+          const count = document.getElementById("count");
+          const form = document.getElementById("commentForm");
+          const nick = document.getElementById("nicknameInput");
+          const input = document.getElementById("commentInput");
+          const submit = form.querySelector('button[type="submit"]');
+          onSnapshot(query(commentsRef, orderBy("createdAt", "desc")), snapshot => {
+            list.replaceChildren();
+            snapshot.docs.forEach(doc => {
+              const item = doc.data();
+              const el = document.createElement("div");
+              el.className = "comment";
+              const avatar = document.createElement("div");
+              avatar.className = "avatar";
+              avatar.textContent = "◉";
+              const body = document.createElement("div");
+              const name = document.createElement("b");
+              name.textContent = item.nickname || "익명";
+              const time = document.createElement("small");
+              const date = item.createdAt?.toDate?.();
+              time.textContent = date ? " · " + date.toLocaleString("ko-KR") : " · 방금";
+              const paragraph = document.createElement("p");
+              paragraph.textContent = item.text || "";
+              body.append(name, time, paragraph);
+              el.append(avatar, body);
+              list.append(el);
+            });
+            count.textContent = snapshot.size.toLocaleString("ko-KR");
+          }, error => {
+            console.error(error);
+            list.textContent = "댓글을 불러오지 못했어요. 잠시 후 새로고침해 주세요.";
+          });
+          form.addEventListener("submit", async event => {
+            event.preventDefault();
+            const nickname = nick.value.trim();
+            const text = input.value.trim();
+            if (!nickname || !text || nickname.length > 20 || text.length > 500) return;
+            submit.disabled = true;
+            submit.textContent = "등록 중…";
+            try {
+              await addDoc(commentsRef, { nickname, text, createdAt: serverTimestamp() });
+              input.value = "";
+            } catch (error) {
+              console.error(error);
+              alert("댓글을 등록하지 못했어요. 잠시 후 다시 시도해 주세요.");
+            } finally {
+              submit.disabled = false;
+              submit.textContent = "등록";
+            }
+          });
+          window.shareArticle = async function () {
+            try {
+              if (navigator.share) await navigator.share({title: document.title, url: location.href});
+              else if (navigator.clipboard) {
+                await navigator.clipboard.writeText(location.href);
+                alert("기사 주소를 복사했어요!");
+              } else alert("주소창의 링크를 복사해 주세요!");
+            } catch (error) {}
+          };
+          </script>'''
+          matches = list(re.finditer(r'<script>.*?</script>', s, flags=re.S))
+          if len(matches) != 1:
+              raise RuntimeError('Expected exactly one existing script')
+          s = s[:matches[0].start()] + script + s[matches[0].end():]
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit article update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet || (git commit -m "Enable shared Firebase comments" && git push)
